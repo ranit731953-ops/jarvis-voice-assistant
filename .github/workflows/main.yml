@@ -1,11 +1,10 @@
-
-name: Build Android APK
+name: Build JARVIS APK
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -25,18 +24,28 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK
+        run: |
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          yes | sdkmanager --licenses || true
 
       - name: Extract Android project
         shell: bash
         run: |
           set -e
 
-          ZIP_FILE="$(find . -maxdepth 2 -type f -name '*.zip' | head -n 1)"
+          ZIP_FILE=$(find . -maxdepth 2 -type f -name "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Android project ZIP not found."
+            echo "ERROR: No ZIP file found"
             exit 1
           fi
 
@@ -44,39 +53,57 @@ jobs:
 
           rm -rf android-project
           mkdir -p android-project
+
           unzip -q "$ZIP_FILE" -d android-project
 
-          GRADLEW="$(find android-project -type f -name gradlew | head -n 1)"
+          SETTINGS_FILE=$(find android-project -type f -name "settings.gradle.kts" -o -name "settings.gradle" | head -n 1)
 
-          if [ -z "$GRADLEW" ]; then
-            echo "ERROR: gradlew not found."
-            find android-project -maxdepth 3 -type f | head -100
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "ERROR: Gradle settings file not found"
+            find android-project -maxdepth 4 -type f | head -100
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$GRADLEW")"
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Make Gradle executable
-        run: chmod +x "$PROJECT_DIR/gradlew"
+          echo "Gradle project found at: $PROJECT_DIR"
 
       - name: Build Debug APK
+        shell: bash
         run: |
+          set -e
           cd "$PROJECT_DIR"
-          ./gradlew assembleDebug --stacktrace
+
+          echo "Building project from:"
+          pwd
+
+          echo "Project files:"
+          ls -la
+
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleDebug --stacktrace
+          else
+            echo "gradlew not found - using installed Gradle"
+            gradle assembleDebug --stacktrace
+          fi
 
       - name: Find APK
         shell: bash
         run: |
-          APK="$(find "$PROJECT_DIR" -type f -name '*.apk' | head -n 1)"
+          set -e
+
+          APK=$(find "$PROJECT_DIR" -type f -name "*.apk" | head -n 1)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: APK was not generated."
+            echo "ERROR: APK was not generated"
             exit 1
           fi
 
-          echo "APK found: $APK"
+          echo "APK found:"
+          echo "$APK"
+
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
 
       - name: Upload APK
@@ -84,4 +111,4 @@ jobs:
         with:
           name: JARVIS-debug-APK
           path: ${{ env.APK_PATH }}
-          if-no-files-found: eerror
+          if-no-files-found: error
